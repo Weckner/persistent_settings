@@ -1,9 +1,10 @@
 ## Interface: 120000
 ## Title: Persistent Settings
-## Notes: Lightweight addon for characters to inherit settings from main
+## Notes: Inherit settings from your main character to all alts
 ## Author: Scoffs
-## Version: 1.0.0
-## IconTexture: Interface\Icons\INV_Misc_QuestionMark
-## SavedVariables: 
+## Version: 0.1.0
+## IconTexture: Interface\Icons\INV_Misc_Gear_01
+## SavedVariables: PersistentSettingsDB
 
-persistent_settings.lua
+Core.lua
+UI.lua

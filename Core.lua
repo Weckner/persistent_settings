@@ -15,9 +15,22 @@ local DefaultDB = {
     mainCharacter = nil,        -- "Name-Realm" of the designated main
     settings = {},              -- Captured settings from main
     enabledSettings = {},       -- Which settings are enabled for inheritance
+    addonSettings = {},        -- Captured addon SavedVariables: ["Addon Name"] = { ... }
     autoApply = false,          -- Auto-apply settings on new character login
     dbVersion = 1,
 }
+
+-- Addon settings: WoW addon folder name -> display key
+local COMBAT_TIMER_ADDON = "combat timer"
+local COMBAT_TIMER_KEY = "addon:Combat Timer"
+
+-- Addon load check (retail uses C_AddOns; fallback for older clients)
+local function IsAddOnLoaded(name)
+    if C_AddOns and C_AddOns.IsAddOnLoaded then
+        return C_AddOns.IsAddOnLoaded(name)
+    end
+    return _G.IsAddOnLoaded and _G.IsAddOnLoaded(name) or false
+end
 
 -- Local references
 local frame = CreateFrame("Frame")
@@ -90,6 +103,68 @@ function PS:GetSettingDefinition(cvarName)
     return nil
 end
 
+-----------------------------------------------------------
+-- Addon Settings (e.g. Combat Timer - positions + font)
+-----------------------------------------------------------
+
+-- Deep copy table (for addon DB snapshots)
+local function DeepCopy(orig)
+    if type(orig) ~= "table" then return orig end
+    local copy = {}
+    for k, v in pairs(orig) do
+        copy[k] = DeepCopy(v)
+    end
+    return copy
+end
+
+-- Capture Combat Timer settings (only if addon is loaded)
+function PS:CaptureCombatTimer()
+    if not IsAddOnLoaded(COMBAT_TIMER_ADDON) then return 0 end
+    if _G.CombatTimerDB == nil and _G.CombatTimerFontDB == nil then return 0 end
+
+    PersistentSettingsDB.addonSettings = PersistentSettingsDB.addonSettings or {}
+    local out = {}
+    if _G.CombatTimerDB then
+        out.db = DeepCopy(_G.CombatTimerDB)
+    end
+    if _G.CombatTimerFontDB then
+        out.fontDB = DeepCopy(_G.CombatTimerFontDB)
+    end
+    if (out.db and next(out.db)) or (out.fontDB and next(out.fontDB)) then
+        PersistentSettingsDB.addonSettings["Combat Timer"] = out
+        return 1
+    end
+    return 0
+end
+
+-- Apply Combat Timer settings (only if addon is loaded; safe if not)
+function PS:ApplyCombatTimer()
+    local data = PersistentSettingsDB.addonSettings and PersistentSettingsDB.addonSettings["Combat Timer"]
+    if not data then return 0 end
+
+    if not IsAddOnLoaded(COMBAT_TIMER_ADDON) then return 0 end
+    if _G.CombatTimerDB == nil then return 0 end
+
+    if data.db then
+        for k, v in pairs(data.db) do
+            _G.CombatTimerDB[k] = DeepCopy(v)
+        end
+    end
+    if data.fontDB then
+        if _G.CombatTimerFontDB == nil then
+            _G.CombatTimerFontDB = {}
+        end
+        for k, v in pairs(data.fontDB) do
+            _G.CombatTimerFontDB[k] = v
+        end
+    end
+
+    if type(_G.CombatTimer_RefreshLayout) == "function" then
+        _G.CombatTimer_RefreshLayout()
+    end
+    return 1
+end
+
 -- Capture all enabled settings from main character
 function PS:CaptureAllSettings()
     if not self:IsMainCharacter() then
@@ -114,7 +189,13 @@ function PS:CaptureAllSettings()
             end
         end
     end
-    
+
+    -- Addon settings (only if addon is loaded)
+    PersistentSettingsDB.addonSettings = PersistentSettingsDB.addonSettings or {}
+    if PersistentSettingsDB.enabledSettings[COMBAT_TIMER_KEY] then
+        count = count + self:CaptureCombatTimer()
+    end
+
     self:Print(string.format("Captured %d settings from main character.", count))
     return true
 end
@@ -130,20 +211,21 @@ function PS:ApplyAllSettings()
         self:Print("No main character designated. Open settings with /ps")
         return false
     end
-    
-    if not PersistentSettingsDB.settings then
+
+    local hasCVars = PersistentSettingsDB.settings and next(PersistentSettingsDB.settings)
+    local hasAddonSettings = PersistentSettingsDB.addonSettings and next(PersistentSettingsDB.addonSettings)
+    if not hasCVars and not hasAddonSettings then
         self:Print("No settings have been captured yet. Log into your main and use /ps capture")
         return false
     end
-    
+
     local applied = 0
     local skipped = 0
-    
+
     for _, category in ipairs(PS.SettingDefinitions) do
         for _, setting in ipairs(category.settings) do
-            -- Only apply if this setting is enabled for inheritance
             if PersistentSettingsDB.enabledSettings[setting.key] then
-                local value = PersistentSettingsDB.settings[setting.key]
+                local value = PersistentSettingsDB.settings and PersistentSettingsDB.settings[setting.key]
                 if value ~= nil then
                     if self:SetCVarValue(setting.key, value) then
                         applied = applied + 1
@@ -154,7 +236,12 @@ function PS:ApplyAllSettings()
             end
         end
     end
-    
+
+    -- Addon settings (only apply if that addon is loaded)
+    if PersistentSettingsDB.enabledSettings[COMBAT_TIMER_KEY] then
+        applied = applied + self:ApplyCombatTimer()
+    end
+
     self:Print(string.format("Applied %d settings from %s", applied, PersistentSettingsDB.mainCharacter))
     if skipped > 0 then
         self:Print(string.format("(%d settings skipped - not captured)", skipped))
@@ -217,18 +304,20 @@ local function InitializeDB()
                 PersistentSettingsDB[key] = {}
             else
                 PersistentSettingsDB[key] = value
-            end
+            endg
         end
     end
 end
 
 local function OnAddonLoaded(self, event, loadedAddon)
-    if loadedAddon ~= addonName then return end
-    
-    InitializeDB()
-    PS:Print("v" .. PS.VERSION .. " loaded. Type /ps for options.")
-    
-    frame:UnregisterEvent("ADDON_LOADED")
+    if loadedAddon == addonName then
+        InitializeDB()
+        PS:Print("v" .. PS.VERSION .. " loaded. Type /ps for options.")
+    end
+    -- When Combat Timer loads (e.g. LoadOnDemand), apply stored settings if enabled
+    if loadedAddon == COMBAT_TIMER_ADDON and PersistentSettingsDB and PersistentSettingsDB.enabledSettings and PersistentSettingsDB.enabledSettings[COMBAT_TIMER_KEY] then
+        PS:ApplyCombatTimer()
+    end
 end
 
 local function OnPlayerLogin(self, event)

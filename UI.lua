@@ -5,6 +5,14 @@
 
 local addonName, PS = ...
 
+-- Addon load check (retail uses C_AddOns; fallback for older clients)
+local function IsAddOnLoaded(name)
+    if C_AddOns and C_AddOns.IsAddOnLoaded then
+        return C_AddOns.IsAddOnLoaded(name)
+    end
+    return _G.IsAddOnLoaded and _G.IsAddOnLoaded(name) or false
+end
+
 -- UI State
 local mainFrame = nil
 local settingsCheckboxes = {}
@@ -172,7 +180,13 @@ end
 -- Settings List Population
 -----------------------------------------------------------
 
--- Setting definitions
+-- Addon setting definitions (only shown when that addon is loaded)
+-- Format: { key = "addon:Display Name", name = "Display Name", tooltip = "...", addonName = "folder name" }
+PS.AddonSettingDefinitions = {
+    { key = "addon:Combat Timer", name = "Combat Timer (positions + font size)", tooltip = "Frame positions and timer font size from Combat Timer addon", addonName = "combat timer" },
+}
+
+-- Setting definitions (CVars)
 -- Format: { key = "cvarName", name = "Display Name", tooltip = "Description" }
 PS.SettingDefinitions = {
     {
@@ -282,7 +296,41 @@ local function PopulateSettingsList()
             yOffset = yOffset - 8 -- Extra spacing between categories
         end
     end
-    
+
+    -- Addon settings (only show when that addon is loaded)
+    if PS.AddonSettingDefinitions and #PS.AddonSettingDefinitions > 0 then
+        local addonSettingsToShow = {}
+        for _, def in ipairs(PS.AddonSettingDefinitions) do
+            if def.addonName and IsAddOnLoaded(def.addonName) then
+                table.insert(addonSettingsToShow, def)
+            end
+        end
+        if #addonSettingsToShow > 0 then
+            local header = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            header:SetPoint("TOPLEFT", 0, yOffset)
+            header:SetText("Addon settings")
+            header:SetTextColor(1, 0.82, 0)
+            table.insert(settingsUIElements, header)
+            yOffset = yOffset - ROW_HEIGHT
+            for _, setting in ipairs(addonSettingsToShow) do
+                local checkbox = CreateCheckbox(scrollChild, nil, setting.name, setting.tooltip,
+                    function(self, checked)
+                        PersistentSettingsDB.enabledSettings[setting.key] = checked
+                    end)
+                checkbox:SetPoint("TOPLEFT", 8, yOffset)
+                if PersistentSettingsDB and PersistentSettingsDB.enabledSettings then
+                    if PersistentSettingsDB.enabledSettings[setting.key] == nil then
+                        PersistentSettingsDB.enabledSettings[setting.key] = true
+                    end
+                    checkbox:SetChecked(PersistentSettingsDB.enabledSettings[setting.key])
+                end
+                settingsCheckboxes[setting.key] = checkbox
+                yOffset = yOffset - ROW_HEIGHT
+            end
+            yOffset = yOffset - 8
+        end
+    end
+
     -- Resize scroll child to fit content
     scrollChild:SetHeight(math.abs(yOffset) + 20)
 end
